@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Generate ASCII STL files for a two-body house.
-- house_body.stl: hollow main body + smaller annex with openings
-- house_roof.stl: two-slope roofs (60% pitch), open underside
+Generate ASCII STL files for a three-body house.
+- house_body.stl: hollow main body + annex + cylindrical tower with openings
+- house_roof.stl: two-slope roofs + conical tower roof (60% pitch), open underside
 - house_merged.stl: merged body+roof, scaled to fit 180x180x180 mm
 
 Before each write, existing STL files are renamed to:
@@ -28,6 +28,12 @@ ANNEX_X0 = BODY_W
 ANNEX_Y0 = 0.0
 ANNEX_Z0 = 0.0
 
+# Third body: cylindrical tower at left of main
+TOWER_RADIUS = 30.0
+TOWER_H = BODY_H * 1.2
+TOWER_CX = -TOWER_RADIUS + 6.0
+TOWER_CY = BODY_D / 2.0
+
 # Body parameters
 WALL_THICKNESS = 2.0
 CEILING_THICKNESS = 2.0
@@ -36,6 +42,10 @@ DOOR_H = 70.0
 WINDOW_W = 30.0
 WINDOW_H = 30.0
 WINDOW_SILL_Z = 45.0
+TOWER_WINDOW_H = 30.0
+TOWER_WINDOW_Z0 = 56.0
+TOWER_WINDOW_ANG_HALF_DEG = 12.0
+TOWER_WINDOW_CENTERS_DEG = (110.0, 180.0, 250.0, 320.0)
 
 # Roof parameters
 ROOF_OVERHANG = 5.0
@@ -238,7 +248,24 @@ def write_body(path: Path):
         main["z1"],
         annex["z1"] - CEILING_THICKNESS,
         annex["z1"],
+        TOWER_H - CEILING_THICKNESS,
+        TOWER_H,
+        TOWER_WINDOW_Z0,
+        TOWER_WINDOW_Z0 + TOWER_WINDOW_H,
     ]
+    # Local refinement around tower to keep the cylindrical profile readable.
+    tower_x0 = TOWER_CX - TOWER_RADIUS
+    tower_x1 = TOWER_CX + TOWER_RADIUS
+    tower_y0 = TOWER_CY - TOWER_RADIUS
+    tower_y1 = TOWER_CY + TOWER_RADIUS
+    step = 1.0
+    n_x = int(round((tower_x1 - tower_x0) / step))
+    n_y = int(round((tower_y1 - tower_y0) / step))
+    for n in range(n_x + 1):
+        xs.append(tower_x0 + n * step)
+    for n in range(n_y + 1):
+        ys.append(tower_y0 + n * step)
+
     xs = unique_sorted(xs)
     ys = unique_sorted(ys)
     zs = unique_sorted(zs)
@@ -265,7 +292,42 @@ def write_body(path: Path):
         annex_back_win = annex_back_wx0 < xc < annex_back_wx1 and annex["y1"] - t < yc < annex["y1"] and win_z0 < zc < win_z1
         annex_right_win = annex["x1"] - t < xc < annex["x1"] and annex_side_wy0 < yc < annex_side_wy1 and win_z0 < zc < win_z1
 
-        return main_door or main_back_win or main_left_win or annex_front_win or annex_back_win or annex_right_win
+        # Tower windows: angular openings through cylindrical wall shell.
+        dx = xc - TOWER_CX
+        dy = yc - TOWER_CY
+        r = math.sqrt(dx * dx + dy * dy)
+        ang = math.degrees(math.atan2(dy, dx))
+        if ang < 0:
+            ang += 360.0
+        tower_window_z = TOWER_WINDOW_Z0 < zc < TOWER_WINDOW_Z0 + TOWER_WINDOW_H
+        tower_window_r = TOWER_RADIUS - t < r < TOWER_RADIUS
+        tower_window_ang = False
+        if tower_window_z and tower_window_r:
+            for c in TOWER_WINDOW_CENTERS_DEG:
+                d = abs(ang - c)
+                d = min(d, 360.0 - d)
+                if d < TOWER_WINDOW_ANG_HALF_DEG:
+                    tower_window_ang = True
+                    break
+
+        return (
+            main_door
+            or main_back_win
+            or main_left_win
+            or annex_front_win
+            or annex_back_win
+            or annex_right_win
+            or tower_window_ang
+        )
+
+    def in_tower_shell(xc, yc, zc):
+        dx = xc - TOWER_CX
+        dy = yc - TOWER_CY
+        r2 = dx * dx + dy * dy
+        in_outer = r2 < TOWER_RADIUS * TOWER_RADIUS and 0.0 < zc < TOWER_H
+        inner_r = TOWER_RADIUS - t
+        in_inner = r2 < inner_r * inner_r and t < zc < TOWER_H - CEILING_THICKNESS
+        return in_outer and not in_inner
 
     solid = [[[False for _ in range(nz)] for _ in range(ny)] for _ in range(nx)]
     for i in range(nx):
@@ -274,7 +336,7 @@ def write_body(path: Path):
             yc = 0.5 * (ys[j] + ys[j + 1])
             for k in range(nz):
                 zc = 0.5 * (zs[k] + zs[k + 1])
-                filled = (in_shell(main, xc, yc, zc) or in_shell(annex, xc, yc, zc)) and not in_opening(xc, yc, zc)
+                filled = (in_shell(main, xc, yc, zc) or in_shell(annex, xc, yc, zc) or in_tower_shell(xc, yc, zc)) and not in_opening(xc, yc, zc)
                 solid[i][j][k] = filled
 
     def is_solid(i, j, k):
@@ -419,6 +481,27 @@ def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimn
     push_quad(b10, t10, t11, b11)
 
 
+def append_cone_roof(tris, cx, cy, base_z, radius, include_bottom_caps):
+    slope = ROOF_SLOPE_PCT / 100.0
+    z_apex = base_z + slope * radius
+    apex = (cx, cy, z_apex)
+    base_center = (cx, cy, base_z)
+    seg = 72
+
+    def ring_point(i):
+        a = 2.0 * math.pi * i / seg
+        return (cx + radius * math.cos(a), cy + radius * math.sin(a), base_z)
+
+    for i in range(seg):
+        p0 = ring_point(i)
+        p1 = ring_point((i + 1) % seg)
+        # Outer conical side.
+        tris.append((p0, p1, apex))
+        # Closed underside for merged output.
+        if include_bottom_caps:
+            tris.append((base_center, p1, p0))
+
+
 def roof_triangles(include_bottom_caps: bool):
     tris = []
 
@@ -445,6 +528,16 @@ def roof_triangles(include_bottom_caps: bool):
         z0=annex["z1"],
         include_bottom_caps=include_bottom_caps,
         add_chimney=False,
+    )
+
+    # Tower cone roof (60% pitch).
+    append_cone_roof(
+        tris,
+        cx=TOWER_CX,
+        cy=TOWER_CY,
+        base_z=TOWER_H,
+        radius=TOWER_RADIUS + ROOF_OVERHANG,
+        include_bottom_caps=include_bottom_caps,
     )
 
     return tris
