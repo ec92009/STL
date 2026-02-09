@@ -347,9 +347,13 @@ def write_body(path: Path):
             and shared_y0 < yc < shared_y1
             and shared_z0 < zc < shared_z1
         )
+        # Restrict opening to the overlapping region between main box and tower
+        # to avoid cutting away the tower's front wall.
+        overlap_y0 = max(main["y0"], TOWER_CY - TOWER_RADIUS)
+        overlap_y1 = min(main["y1"], TOWER_CY + TOWER_RADIUS)
         open_main_tower = (
             main_tower_open_x0 < xc < main_tower_open_x1
-            and main_tower_open_y0 < yc < main_tower_open_y1
+            and overlap_y0 < yc < overlap_y1
             and main_tower_open_z0 < zc < main_tower_open_z1
         )
 
