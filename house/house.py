@@ -252,10 +252,10 @@ def write_body(path: Path):
     shared_z1 = min(main["z1"], annex["z1"]) - CEILING_THICKNESS
 
     # Open the shared wall between main and tower across the overlapping footprint.
-    main_tower_open_x0 = 0.0
-    main_tower_open_x1 = min(BODY_W, TOWER_CX + TOWER_RADIUS - EXTERIOR_WALL_THICKNESS)
-    main_tower_open_y0 = TOWER_CY - (TOWER_RADIUS - EXTERIOR_WALL_THICKNESS)
-    main_tower_open_y1 = TOWER_CY + (TOWER_RADIUS - EXTERIOR_WALL_THICKNESS)
+    main_tower_open_x0 = -TOWER_RADIUS
+    main_tower_open_x1 = min(BODY_W, TOWER_CX + TOWER_RADIUS + EXTERIOR_WALL_THICKNESS)
+    main_tower_open_y0 = TOWER_CY - (TOWER_RADIUS + EXTERIOR_WALL_THICKNESS)
+    main_tower_open_y1 = TOWER_CY + (TOWER_RADIUS + EXTERIOR_WALL_THICKNESS)
     # Keep a floor lip to avoid punching through the floor at the opening base.
     main_tower_open_z0 = EXTERIOR_WALL_THICKNESS
     main_tower_open_z1 = min(main["z1"], TOWER_H) - CEILING_THICKNESS
