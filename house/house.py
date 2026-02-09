@@ -251,13 +251,14 @@ def write_body(path: Path):
     shared_z0 = EXTERIOR_WALL_THICKNESS
     shared_z1 = min(main["z1"], annex["z1"]) - CEILING_THICKNESS
 
-    main_tower_open_x0 = -100.0
-    main_tower_open_x1 = 450.0
-    main_tower_open_y0 = TOWER_CY - 700.0
-    main_tower_open_y1 = TOWER_CY + 700.0
+    # Open the shared wall between main and tower across the overlapping footprint.
+    main_tower_open_x0 = 0.0
+    main_tower_open_x1 = min(BODY_W, TOWER_CX + TOWER_RADIUS - EXTERIOR_WALL_THICKNESS)
+    main_tower_open_y0 = TOWER_CY - (TOWER_RADIUS - EXTERIOR_WALL_THICKNESS)
+    main_tower_open_y1 = TOWER_CY + (TOWER_RADIUS - EXTERIOR_WALL_THICKNESS)
     # Keep a floor lip to avoid punching through the floor at the opening base.
     main_tower_open_z0 = EXTERIOR_WALL_THICKNESS
-    main_tower_open_z1 = 2200.0
+    main_tower_open_z1 = min(main["z1"], TOWER_H) - CEILING_THICKNESS
 
     # Grid lines for robust CSG-by-sampling.
     xs = [
@@ -342,7 +343,7 @@ def write_body(path: Path):
 
         # Interior openings so connected bodies communicate.
         open_main_annex = (
-            main["x1"] - t_int < xc < annex["x0"] + t_int
+            main["x1"] - t < xc < annex["x0"] + t
             and shared_y0 < yc < shared_y1
             and shared_z0 < zc < shared_z1
         )
