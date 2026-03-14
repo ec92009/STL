@@ -74,8 +74,10 @@ SKYLIGHT_D = 520.0
 SKYLIGHT_H = 80.0
 SKYLIGHT_INSET = 90.0
 
-BODY_COLOR = "#E6DED0FF"
-ROOF_COLOR = "#4B4742FF"
+BODY_COLOR = "#FFFFFFFF"
+ROOF_COLOR = "#C62828FF"
+FLOOR_COLOR = "#111111FF"
+FLOOR_OVERLAY_THICKNESS = 30.0
 
 
 def sub(a, b):
@@ -115,6 +117,46 @@ def add_quad(f, p1, p2, p3, p4):
 
 def add_triangle(f, p1, p2, p3):
     write_facet(f, p1, p2, p3)
+
+
+def append_triangle(tris, p1, p2, p3):
+    tris.append((p1, p2, p3))
+
+
+def append_quad(tris, p1, p2, p3, p4):
+    append_triangle(tris, p1, p2, p3)
+    append_triangle(tris, p1, p3, p4)
+
+
+def append_box(tris, x0, x1, y0, y1, z0, z1):
+    append_quad(tris, (x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0))
+    append_quad(tris, (x0, y0, z1), (x0, y1, z1), (x1, y1, z1), (x1, y0, z1))
+    append_quad(tris, (x0, y0, z0), (x0, y0, z1), (x1, y0, z1), (x1, y0, z0))
+    append_quad(tris, (x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1))
+    append_quad(tris, (x0, y0, z0), (x0, y1, z0), (x0, y1, z1), (x0, y0, z1))
+    append_quad(tris, (x1, y0, z0), (x1, y0, z1), (x1, y1, z1), (x1, y1, z0))
+
+
+def append_cylinder(tris, cx, cy, radius, z0, z1, seg=96):
+    bottom = []
+    top = []
+    for i in range(seg):
+        a = 2.0 * math.pi * i / seg
+        x = cx + radius * math.cos(a)
+        y = cy + radius * math.sin(a)
+        bottom.append((x, y, z0))
+        top.append((x, y, z1))
+
+    for i in range(seg):
+        j = (i + 1) % seg
+        append_quad(tris, bottom[i], bottom[j], top[j], top[i])
+
+    center_bottom = (cx, cy, z0)
+    center_top = (cx, cy, z1)
+    for i in range(seg):
+        j = (i + 1) % seg
+        append_triangle(tris, center_bottom, bottom[j], bottom[i])
+        append_triangle(tris, center_top, top[i], top[j])
 
 
 def unique_sorted(values):
@@ -339,7 +381,7 @@ def body_rect(x0, y0, z0, w, d, h):
     }
 
 
-def write_body(path: Path):
+def body_triangles(include_ceilings=True):
     main = body_rect(0.0, 0.0, 0.0, BODY_W, BODY_D, BODY_H)
     annex = body_rect(ANNEX_X0, ANNEX_Y0, ANNEX_Z0, ANNEX_W, ANNEX_D, ANNEX_H)
 
@@ -399,17 +441,24 @@ def write_body(path: Path):
         win_z0,
         DOOR_H,
         win_z1,
-        main["z1"] - CEILING_THICKNESS,
-        main["z1"],
-        annex["z1"] - CEILING_THICKNESS,
-        annex["z1"],
         TOWER_BAND_Z0,
         TOWER_BAND_Z0 + TOWER_BAND_H,
-        TOWER_H - CEILING_THICKNESS,
-        TOWER_H,
         TOWER_WINDOW_Z0,
         TOWER_WINDOW_Z0 + TOWER_WINDOW_H,
     ]
+    if include_ceilings:
+        zs.extend(
+            [
+                main["z1"] - CEILING_THICKNESS,
+                main["z1"],
+                annex["z1"] - CEILING_THICKNESS,
+                annex["z1"],
+                TOWER_H - CEILING_THICKNESS,
+                TOWER_H,
+            ]
+        )
+    else:
+        zs.extend([main["z1"], annex["z1"], TOWER_H])
     # Local refinement around tower to keep the cylindrical profile readable.
     tower_x0 = TOWER_CX - TOWER_RADIUS
     tower_x1 = TOWER_CX + TOWER_RADIUS
@@ -455,11 +504,12 @@ def write_body(path: Path):
     nx, ny, nz = len(xs) - 1, len(ys) - 1, len(zs) - 1
 
     def in_shell(rect, xc, yc, zc):
+        ceiling_cut = CEILING_THICKNESS if include_ceilings else 0.0
         in_outer = rect["x0"] < xc < rect["x1"] and rect["y0"] < yc < rect["y1"] and rect["z0"] < zc < rect["z1"]
         in_inner = (
             rect["x0"] + t < xc < rect["x1"] - t
             and rect["y0"] + t < yc < rect["y1"] - t
-            and rect["z0"] + t < zc < rect["z1"] - CEILING_THICKNESS
+            and rect["z0"] + t < zc < rect["z1"] - ceiling_cut
         )
         return in_outer and not in_inner
 
@@ -530,7 +580,8 @@ def write_body(path: Path):
         r2 = dx * dx + dy * dy
         in_outer = r2 < TOWER_RADIUS * TOWER_RADIUS and 0.0 < zc < TOWER_H
         inner_r = TOWER_RADIUS - t
-        in_inner = r2 < inner_r * inner_r and t < zc < TOWER_H - CEILING_THICKNESS
+        ceiling_cut = CEILING_THICKNESS if include_ceilings else 0.0
+        in_inner = r2 < inner_r * inner_r and t < zc < TOWER_H - ceiling_cut
         return in_outer and not in_inner
 
     def in_plinth_rect(rect, xc, yc, zc):
@@ -578,31 +629,34 @@ def write_body(path: Path):
             return False
         return solid[i][j][k]
 
-    with path.open("w", encoding="ascii") as f:
-        f.write("solid house_body\n")
-        for i in range(nx):
-            for j in range(ny):
-                for k in range(nz):
-                    if not solid[i][j][k]:
-                        continue
+    tris = []
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                if not solid[i][j][k]:
+                    continue
 
-                    xa, xb = xs[i], xs[i + 1]
-                    ya, yb = ys[j], ys[j + 1]
-                    za, zb = zs[k], zs[k + 1]
+                xa, xb = xs[i], xs[i + 1]
+                ya, yb = ys[j], ys[j + 1]
+                za, zb = zs[k], zs[k + 1]
 
-                    if not is_solid(i - 1, j, k):
-                        add_quad(f, (xa, ya, za), (xa, yb, za), (xa, yb, zb), (xa, ya, zb))
-                    if not is_solid(i + 1, j, k):
-                        add_quad(f, (xb, ya, za), (xb, ya, zb), (xb, yb, zb), (xb, yb, za))
-                    if not is_solid(i, j - 1, k):
-                        add_quad(f, (xa, ya, za), (xa, ya, zb), (xb, ya, zb), (xb, ya, za))
-                    if not is_solid(i, j + 1, k):
-                        add_quad(f, (xa, yb, za), (xb, yb, za), (xb, yb, zb), (xa, yb, zb))
-                    if not is_solid(i, j, k - 1):
-                        add_quad(f, (xa, ya, za), (xb, ya, za), (xb, yb, za), (xa, yb, za))
-                    if not is_solid(i, j, k + 1):
-                        add_quad(f, (xa, ya, zb), (xa, yb, zb), (xb, yb, zb), (xb, ya, zb))
-        f.write("endsolid house_body\n")
+                if not is_solid(i - 1, j, k):
+                    append_quad(tris, (xa, ya, za), (xa, yb, za), (xa, yb, zb), (xa, ya, zb))
+                if not is_solid(i + 1, j, k):
+                    append_quad(tris, (xb, ya, za), (xb, ya, zb), (xb, yb, zb), (xb, yb, za))
+                if not is_solid(i, j - 1, k):
+                    append_quad(tris, (xa, ya, za), (xa, ya, zb), (xb, ya, zb), (xb, ya, za))
+                if not is_solid(i, j + 1, k):
+                    append_quad(tris, (xa, yb, za), (xb, yb, za), (xb, yb, zb), (xa, yb, zb))
+                if not is_solid(i, j, k - 1):
+                    append_quad(tris, (xa, ya, za), (xb, ya, za), (xb, yb, za), (xa, yb, za))
+                if not is_solid(i, j, k + 1):
+                    append_quad(tris, (xa, ya, zb), (xa, yb, zb), (xb, yb, zb), (xb, ya, zb))
+    return tris
+
+
+def write_body(path: Path):
+    write_ascii_stl_triangles(path, "house_body", body_triangles(include_ceilings=True))
 
 
 def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimney=False, slope_pct=ROOF_SLOPE_PCT, skylight_shift=0.38):
@@ -798,6 +852,38 @@ def roof_triangles_closed_underside():
     return roof_triangles(include_bottom_caps=True)
 
 
+def floor_overlay_triangles():
+    tris = []
+    z0 = EXTERIOR_WALL_THICKNESS
+    z1 = z0 + FLOOR_OVERLAY_THICKNESS
+    t = EXTERIOR_WALL_THICKNESS
+
+    append_box(
+        tris,
+        0.0 + t,
+        BODY_W - t,
+        0.0 + t,
+        BODY_D - t,
+        z0,
+        z1,
+    )
+
+    append_box(
+        tris,
+        ANNEX_X0 + t,
+        ANNEX_X0 + ANNEX_W - t,
+        ANNEX_Y0 + t,
+        ANNEX_Y0 + ANNEX_D - t,
+        z0,
+        z1,
+    )
+
+    # Keep the tower floor just inside the inner wall and slightly clear of the main-body overlap.
+    tower_floor_radius = TOWER_RADIUS - t - 20.0
+    append_cylinder(tris, TOWER_CX, TOWER_CY, tower_floor_radius, z0, z1, seg=96)
+    return tris
+
+
 def main():
     body_path = OUT_DIR / "house_body.stl"
     roof_path = OUT_DIR / "house_roof.stl"
@@ -821,11 +907,16 @@ def main():
     body_tris = read_ascii_stl_triangles(body_path)
     roof_tris_open = read_ascii_stl_triangles(roof_path)
     roof_tris_closed = roof_triangles_closed_underside()
+    body_tris_open_top = body_triangles(include_ceilings=False)
+    floor_tris = floor_overlay_triangles()
 
     write_3mf(
         body_3mf_path,
         "house_body",
-        [{"name": "body", "color": BODY_COLOR, "triangles": body_tris}],
+        [
+            {"name": "walls", "color": BODY_COLOR, "triangles": body_tris},
+            {"name": "floors", "color": FLOOR_COLOR, "triangles": floor_tris},
+        ],
     )
     write_3mf(
         roof_3mf_path,
@@ -841,12 +932,21 @@ def main():
     scaled_roof_tris = scaled_parts[1][1]
     merged_tris = scaled_body_tris + scaled_roof_tris
     write_ascii_stl_triangles(merged_path, "house_merged", merged_tris)
+
+    scaled_3mf_parts, _, _, _ = scale_and_rebase_parts(
+        [("walls", body_tris_open_top), ("roof", roof_tris_closed), ("floors", floor_tris)],
+        max_size=180.0,
+    )
+    scaled_wall_tris = scaled_3mf_parts[0][1]
+    scaled_3mf_roof_tris = scaled_3mf_parts[1][1]
+    scaled_floor_tris = scaled_3mf_parts[2][1]
     write_3mf(
         merged_3mf_path,
         "house_merged",
         [
-            {"name": "body", "color": BODY_COLOR, "triangles": scaled_body_tris},
-            {"name": "roof", "color": ROOF_COLOR, "triangles": scaled_roof_tris},
+            {"name": "walls", "color": BODY_COLOR, "triangles": scaled_wall_tris},
+            {"name": "roof", "color": ROOF_COLOR, "triangles": scaled_3mf_roof_tris},
+            {"name": "floors", "color": FLOOR_COLOR, "triangles": scaled_floor_tris},
         ],
     )
 
