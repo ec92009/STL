@@ -83,6 +83,13 @@ BODY_COLOR = "#FFFFFFFF"
 ROOF_COLOR = "#C62828FF"
 FLOOR_COLOR = "#111111FF"
 FLOOR_OVERLAY_THICKNESS = 30.0
+PALETTE = [
+    ("walls", BODY_COLOR),
+    ("floors", FLOOR_COLOR),
+    ("roof", ROOF_COLOR),
+]
+TOWER_PASSAGE_W = 1100.0
+TOWER_PASSAGE_H = 2100.0
 
 
 def sub(a, b):
@@ -315,9 +322,9 @@ def write_3mf(path: Path, model_name: str, objects):
     build_items = []
     material_xml = []
 
-    for color_index, obj in enumerate(objects):
+    for material_name, color in PALETTE:
         material_xml.append(
-            f'<m:base name="{obj["name"]}" displaycolor="{obj["color"]}"/>'
+            f'<m:base name="{material_name}" displaycolor="{color}"/>'
         )
 
     for object_id, obj in enumerate(objects, start=1):
@@ -329,11 +336,9 @@ def write_3mf(path: Path, model_name: str, objects):
             f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in triangles
         )
         resources.append(
-            (
-                f'<object id="{object_id}" name="{obj["name"]}" type="model" pid="1" pindex="{object_id - 1}">'
-                f"<mesh><vertices>{verts_xml}</vertices><triangles>{tris_xml}</triangles></mesh>"
-                f"</object>"
-            )
+            f'<object id="{object_id}" name="{obj["name"]}" type="model" pid="1" pindex="{obj["material_index"]}">'
+            f"<mesh><vertices>{verts_xml}</vertices><triangles>{tris_xml}</triangles></mesh>"
+            f"</object>"
         )
         build_items.append(f'<item objectid="{object_id}"/>')
 
@@ -429,14 +434,11 @@ def body_triangles(include_ceilings=True):
     shared_z0 = EXTERIOR_WALL_THICKNESS
     shared_z1 = min(main["z1"], annex["z1"]) - CEILING_THICKNESS
 
-    # Open the shared wall between main and tower across the overlapping footprint.
-    main_tower_open_x0 = -TOWER_RADIUS
-    main_tower_open_x1 = min(BODY_W, TOWER_CX + TOWER_RADIUS + EXTERIOR_WALL_THICKNESS)
-    main_tower_open_y0 = TOWER_CY - (TOWER_RADIUS + EXTERIOR_WALL_THICKNESS)
-    main_tower_open_y1 = TOWER_CY + (TOWER_RADIUS + EXTERIOR_WALL_THICKNESS)
-    # Keep a floor lip to avoid punching through the floor at the opening base.
-    main_tower_open_z0 = EXTERIOR_WALL_THICKNESS
-    main_tower_open_z1 = min(main["z1"], TOWER_H) - CEILING_THICKNESS
+    # Door-sized passage between tower connector and main body.
+    tower_passage_y0 = TOWER_CY - TOWER_PASSAGE_W / 2.0
+    tower_passage_y1 = TOWER_CY + TOWER_PASSAGE_W / 2.0
+    tower_passage_z0 = 0.0
+    tower_passage_z1 = TOWER_PASSAGE_H
 
     # Grid lines for robust CSG-by-sampling.
     xs = [
@@ -563,18 +565,10 @@ def body_triangles(include_ceilings=True):
             and shared_y0 < yc < shared_y1
             and shared_z0 < zc < shared_z1
         )
-        # Cut the shared tower/main wall using the tower's own circular footprint
-        # so we remove the remaining sliver without flattening the tower facade.
-        tower_overlap_r = TOWER_RADIUS + EXTERIOR_WALL_THICKNESS
-        in_tower_overlap = (
-            (xc - TOWER_CX) * (xc - TOWER_CX) + (yc - TOWER_CY) * (yc - TOWER_CY)
-            < tower_overlap_r * tower_overlap_r
-        )
         open_main_tower = (
-            main["x0"] - EXTERIOR_WALL_THICKNESS < xc < main_tower_open_x1
-            and main["y0"] + EXTERIOR_WALL_THICKNESS < yc < main["y1"] - EXTERIOR_WALL_THICKNESS
-            and in_tower_overlap
-            and main_tower_open_z0 < zc < main_tower_open_z1
+            -EXTERIOR_WALL_THICKNESS < xc < EXTERIOR_WALL_THICKNESS
+            and tower_passage_y0 < yc < tower_passage_y1
+            and tower_passage_z0 < zc < tower_passage_z1
         )
 
         return (
@@ -907,14 +901,14 @@ def main():
         body_3mf_path,
         "house_body",
         [
-            {"name": "walls", "color": BODY_COLOR, "triangles": body_tris},
-            {"name": "floors", "color": FLOOR_COLOR, "triangles": floor_tris},
+            {"name": "walls", "material_index": 0, "triangles": body_tris},
+            {"name": "floors", "material_index": 1, "triangles": floor_tris},
         ],
     )
     write_3mf(
         roof_3mf_path,
         "house_roof",
-        [{"name": "roof", "color": ROOF_COLOR, "triangles": roof_tris_open}],
+        [{"name": "roof", "material_index": 2, "triangles": roof_tris_open}],
     )
 
     scaled_parts, scale, mins, maxs = scale_and_rebase_parts(
@@ -937,9 +931,9 @@ def main():
         merged_3mf_path,
         "house_merged",
         [
-            {"name": "walls", "color": BODY_COLOR, "triangles": scaled_wall_tris},
-            {"name": "roof", "color": ROOF_COLOR, "triangles": scaled_3mf_roof_tris},
-            {"name": "floors", "color": FLOOR_COLOR, "triangles": scaled_floor_tris},
+            {"name": "walls", "material_index": 0, "triangles": scaled_wall_tris},
+            {"name": "floors", "material_index": 1, "triangles": scaled_floor_tris},
+            {"name": "roof", "material_index": 2, "triangles": scaled_3mf_roof_tris},
         ],
     )
 
