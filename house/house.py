@@ -62,9 +62,10 @@ CHIMNEY_D = 500.0
 CHIMNEY_H = 900.0
 CHIMNEY_CAP_OVERHANG = 80.0
 CHIMNEY_CAP_THICKNESS = 100.0
-SKYLIGHT_W = 900.0
-SKYLIGHT_D = 600.0
-SKYLIGHT_H = 120.0
+SKYLIGHT_W = 850.0
+SKYLIGHT_D = 520.0
+SKYLIGHT_H = 80.0
+SKYLIGHT_INSET = 90.0
 
 
 def sub(a, b):
@@ -521,11 +522,19 @@ def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimn
     b10 = (sky_x1, sky_y0, z_at_y0)
     b11 = (sky_x1, sky_y1, z_at_y1)
     b01 = (sky_x0, sky_y1, z_at_y1)
-    t00 = (sky_x0, sky_y0, z_at_y0 + SKYLIGHT_H)
-    t10 = (sky_x1, sky_y0, z_at_y0 + SKYLIGHT_H)
-    t11 = (sky_x1, sky_y1, z_at_y1 + SKYLIGHT_H)
-    t01 = (sky_x0, sky_y1, z_at_y1 + SKYLIGHT_H)
 
+    top_x0 = sky_x0 + SKYLIGHT_INSET
+    top_x1 = sky_x1 - SKYLIGHT_INSET
+    top_y0 = sky_y0 + SKYLIGHT_INSET
+    top_y1 = sky_y1 - SKYLIGHT_INSET
+    z_top_y0 = z0 + slope * (top_y0 - y0) - 0.8 + SKYLIGHT_H
+    z_top_y1 = z0 + slope * (top_y1 - y0) - 0.8 + SKYLIGHT_H
+    t00 = (top_x0, top_y0, z_top_y0)
+    t10 = (top_x1, top_y0, z_top_y0)
+    t11 = (top_x1, top_y1, z_top_y1)
+    t01 = (top_x0, top_y1, z_top_y1)
+
+    # Tapered skylight reads more like an integrated roof lantern than a box.
     push_quad(b00, b10, b11, b01)
     push_quad(t00, t01, t11, t10)
     push_quad(b00, b10, t10, t00)
