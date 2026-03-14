@@ -82,14 +82,12 @@ SKYLIGHT_INSET = 90.0
 BODY_COLOR = "#FFFFFFFF"
 ROOF_COLOR = "#C62828FF"
 FLOOR_COLOR = "#111111FF"
-FLOOR_OVERLAY_THICKNESS = 30.0
+FLOOR_HEIGHT = 200.0
 PALETTE = [
     ("walls", BODY_COLOR),
     ("floors", FLOOR_COLOR),
     ("roof", ROOF_COLOR),
 ]
-TOWER_PASSAGE_W = 1100.0
-TOWER_PASSAGE_H = 2100.0
 
 
 def sub(a, b):
@@ -434,11 +432,13 @@ def body_triangles(include_ceilings=True):
     shared_z0 = EXTERIOR_WALL_THICKNESS
     shared_z1 = min(main["z1"], annex["z1"]) - CEILING_THICKNESS
 
-    # Door-sized passage between tower connector and main body.
-    tower_passage_y0 = TOWER_CY - TOWER_PASSAGE_W / 2.0
-    tower_passage_y1 = TOWER_CY + TOWER_PASSAGE_W / 2.0
-    tower_passage_z0 = 0.0
-    tower_passage_z1 = TOWER_PASSAGE_H
+    # Reopen the shared wall between tower connector and main body.
+    main_tower_open_x0 = tower_connector["x0"]
+    main_tower_open_x1 = tower_connector["x1"] + EXTERIOR_WALL_THICKNESS
+    main_tower_open_y0 = tower_connector["y0"] + EXTERIOR_WALL_THICKNESS
+    main_tower_open_y1 = tower_connector["y1"] - EXTERIOR_WALL_THICKNESS
+    main_tower_open_z0 = EXTERIOR_WALL_THICKNESS
+    main_tower_open_z1 = min(main["z1"], tower_connector["z1"]) - CEILING_THICKNESS
 
     # Grid lines for robust CSG-by-sampling.
     xs = [
@@ -566,9 +566,9 @@ def body_triangles(include_ceilings=True):
             and shared_z0 < zc < shared_z1
         )
         open_main_tower = (
-            -EXTERIOR_WALL_THICKNESS < xc < EXTERIOR_WALL_THICKNESS
-            and tower_passage_y0 < yc < tower_passage_y1
-            and tower_passage_z0 < zc < tower_passage_z1
+            main_tower_open_x0 < xc < main_tower_open_x1
+            and main_tower_open_y0 < yc < main_tower_open_y1
+            and main_tower_open_z0 < zc < main_tower_open_z1
         )
 
         return (
@@ -841,8 +841,8 @@ def roof_triangles_closed_underside():
 
 def floor_overlay_triangles():
     tris = []
-    z0 = EXTERIOR_WALL_THICKNESS
-    z1 = z0 + FLOOR_OVERLAY_THICKNESS
+    z0 = 0.0
+    z1 = FLOOR_HEIGHT
     t = EXTERIOR_WALL_THICKNESS
 
     append_box(
@@ -868,6 +868,17 @@ def floor_overlay_triangles():
     # Keep the tower floor just inside the inner wall and slightly clear of the main-body overlap.
     tower_floor_radius = TOWER_RADIUS - t - 20.0
     append_cylinder(tris, TOWER_CX, TOWER_CY, tower_floor_radius, z0, z1, seg=96)
+
+    # Fill the connector passage floor so the tower and main body share the same ground plane.
+    append_box(
+        tris,
+        TOWER_CONNECTOR_X0 + t,
+        TOWER_CONNECTOR_X1,
+        TOWER_CONNECTOR_Y0 + t,
+        TOWER_CONNECTOR_Y1 - t,
+        z0,
+        z1,
+    )
     return tris
 
 
