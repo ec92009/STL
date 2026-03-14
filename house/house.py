@@ -11,6 +11,8 @@ Before each write, existing outputs are renamed to:
 
 import math
 import subprocess
+import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -376,6 +378,192 @@ def write_3mf(path: Path, model_name: str, objects):
         zf.writestr("[Content_Types].xml", content_types_xml)
         zf.writestr("_rels/.rels", rels_xml)
         zf.writestr("3D/3dmodel.model", model_xml)
+
+
+def triangle_edge_stats(triangles):
+    edges = Counter()
+    vertices, indexed = triangles_to_indexed_mesh(triangles)
+    for a, b, c in indexed:
+        for e in ((a, b), (b, c), (c, a)):
+            edges[tuple(sorted(e))] += 1
+    bad_edges = sum(1 for count in edges.values() if count != 2)
+    return len(indexed), bad_edges
+
+
+def find_bambu_template(path: Path):
+    candidates = sorted(
+        path.parent.glob(f"{path.stem}.*.prev{path.suffix}"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        try:
+            with ZipFile(candidate) as zf:
+                if "Metadata/model_settings.config" in zf.namelist():
+                    return candidate
+        except Exception:
+            continue
+    return None
+
+
+def write_bambu_3mf(path: Path, model_name: str, objects, template_path: Path | None = None):
+    def new_uuid():
+        return str(uuid.uuid4())
+
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+        '<Default Extension="png" ContentType="image/png"/>'
+        '<Default Extension="json" ContentType="application/json"/>'
+        '<Default Extension="config" ContentType="text/plain"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        "</Types>"
+    )
+
+    root_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Target="/3D/3dmodel.model" Id="rel0" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+        "</Relationships>"
+    )
+
+    model_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Target="/3D/Objects/object_1.model" Id="rel-1" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+        "</Relationships>"
+    )
+
+    object_resources = []
+    component_xml = []
+    config_parts = []
+    all_triangles = []
+
+    for idx, obj in enumerate(objects, start=1):
+        vertices, indexed = triangles_to_indexed_mesh(obj["triangles"])
+        verts_xml = "".join(
+            f'<vertex x="{x:.6f}" y="{y:.6f}" z="{z:.6f}"/>' for x, y, z in vertices
+        )
+        tris_xml = "".join(
+            f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in indexed
+        )
+        object_resources.append(
+            f'<object id="{idx}" p:UUID="{new_uuid()}" type="model">'
+            f"<mesh><vertices>{verts_xml}</vertices><triangles>{tris_xml}</triangles></mesh>"
+            f"</object>"
+        )
+        component_xml.append(
+            f'<component p:path="/3D/Objects/object_1.model" objectid="{idx}" '
+            f'p:UUID="{new_uuid()}" transform="1 0 0 0 1 0 0 0 1 0 0 0"/>'
+        )
+        face_count, bad_edges = triangle_edge_stats(obj["triangles"])
+        config_parts.append(
+            f'<part id="{idx}" subtype="normal_part">'
+            f'<metadata key="name" value="{obj["name"]}"/>'
+            f'<metadata key="source_file" value="{path.name}"/>'
+            f'<metadata key="source_object_id" value="{idx - 1}"/>'
+            f'<metadata key="source_volume_id" value="0"/>'
+            f'<metadata key="extruder" value="{obj["material_index"] + 1}"/>'
+            f'<mesh_stat face_count="{face_count}" edges_fixed="{bad_edges}" '
+            f'degenerate_facets="0" facets_removed="0" facets_reversed="0" backwards_edges="0"/>'
+            f"</part>"
+        )
+        all_triangles.extend(obj["triangles"])
+
+    total_faces, total_bad_edges = triangle_edge_stats(all_triangles)
+
+    object_model_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<model unit="millimeter" xml:lang="en-US" '
+        'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" '
+        'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" '
+        'requiredextensions="p">'
+        '<metadata name="BambuStudio:3mfVersion">1</metadata>'
+        f"<resources>{''.join(object_resources)}</resources>"
+        "</model>"
+    )
+
+    top_model_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<model unit="millimeter" xml:lang="en-US" '
+        'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        'xmlns:BambuStudio="http://schemas.bambulab.com/package/2021" '
+        'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" '
+        'requiredextensions="p">'
+        '<metadata name="Application">BambuStudio-02.04.00.70</metadata>'
+        '<metadata name="BambuStudio:3mfVersion">1</metadata>'
+        f'<metadata name="CreationDate">{datetime.now().date().isoformat()}</metadata>'
+        f'<metadata name="ModificationDate">{datetime.now().date().isoformat()}</metadata>'
+        f'<metadata name="Title">{model_name}</metadata>'
+        "<resources>"
+        f'<object id="{len(objects) + 1}" p:UUID="{new_uuid()}" type="model">'
+        f"<components>{''.join(component_xml)}</components>"
+        "</object>"
+        "</resources>"
+        f'<build p:UUID="{new_uuid()}"><item objectid="{len(objects) + 1}" '
+        'p:UUID="' + new_uuid() + '" transform="1 0 0 0 1 0 0 0 1 0 0 0" printable="1"/>'
+        "</build>"
+        "</model>"
+    )
+
+    model_settings_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<config>"
+        f'<object id="{len(objects) + 1}">'
+        f'<metadata key="name" value="{model_name}"/>'
+        '<metadata key="extruder" value="1"/>'
+        f'<metadata face_count="{total_faces}"/>'
+        f"{''.join(config_parts)}"
+        "</object>"
+        "<plate>"
+        '<metadata key="plater_id" value="1"/>'
+        '<metadata key="plater_name" value=""/>'
+        '<metadata key="locked" value="false"/>'
+        '<metadata key="filament_map_mode" value="Auto For Flush"/>'
+        '<metadata key="filament_maps" value="1 2 3 1 1 1 1 1 1 1 1"/>'
+        '<metadata key="filament_volume_maps" value="0 0 0 0 0 0 0 0 0 0 0"/>'
+        "<model_instance>"
+        f'<metadata key="object_id" value="{len(objects) + 1}"/>'
+        '<metadata key="instance_id" value="0"/>'
+        '<metadata key="identify_id" value="113"/>'
+        "</model_instance>"
+        "</plate>"
+        "<assemble>"
+        f'<assemble_item object_id="{len(objects) + 1}" instance_id="0" '
+        'transform="1 0 0 0 1 0 0 0 1 0 0 0" offset="0 0 0" />'
+        "</assemble>"
+        "</config>"
+    )
+
+    template_entries = {}
+    if template_path and template_path.exists():
+        with ZipFile(template_path) as zf:
+            for name in zf.namelist():
+                if name in {
+                    "[Content_Types].xml",
+                    "_rels/.rels",
+                    "3D/3dmodel.model",
+                    "3D/_rels/3dmodel.model.rels",
+                    "3D/Objects/object_1.model",
+                    "Metadata/model_settings.config",
+                }:
+                    continue
+                template_entries[name] = zf.read(name)
+
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", root_rels_xml)
+        zf.writestr("3D/3dmodel.model", top_model_xml)
+        zf.writestr("3D/_rels/3dmodel.model.rels", model_rels_xml)
+        zf.writestr("3D/Objects/object_1.model", object_model_xml)
+        zf.writestr("Metadata/model_settings.config", model_settings_xml)
+        for name, data in template_entries.items():
+            zf.writestr(name, data)
 
 
 def body_rect(x0, y0, z0, w, d, h):
@@ -938,7 +1126,8 @@ def main():
     scaled_wall_tris = scaled_3mf_parts[0][1]
     scaled_3mf_roof_tris = scaled_3mf_parts[1][1]
     scaled_floor_tris = scaled_3mf_parts[2][1]
-    write_3mf(
+    template_3mf = find_bambu_template(merged_3mf_path)
+    write_bambu_3mf(
         merged_3mf_path,
         "house_merged",
         [
@@ -946,6 +1135,7 @@ def main():
             {"name": "floors", "material_index": 1, "triangles": scaled_floor_tris},
             {"name": "roof", "material_index": 2, "triangles": scaled_3mf_roof_tris},
         ],
+        template_path=template_3mf,
     )
 
     if body_backup:
