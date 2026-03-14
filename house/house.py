@@ -27,7 +27,7 @@ ANNEX_W = 6000.0
 ANNEX_D = 3500.0
 ANNEX_H = 4500.0
 ANNEX_X0 = BODY_W
-ANNEX_Y0 = 0.0
+ANNEX_Y0 = 250.0
 ANNEX_Z0 = 0.0
 
 # Third body: cylindrical tower at left of main
@@ -48,14 +48,20 @@ WINDOW_W = 1200.0
 WINDOW_H = 1200.0
 WINDOW_SILL_Z = 1000.0
 TOWER_WINDOW_H = 1100.0
-TOWER_WINDOW_Z0 = 2300.0
-TOWER_WINDOW_ANG_HALF_DEG = 12.0
+TOWER_WINDOW_Z0 = 1700.0
+TOWER_WINDOW_ANG_HALF_DEG = 6.0
 TOWER_WINDOW_CENTERS_DEG = (110.0, 180.0, 250.0, 320.0)
 TOWER_GRID_STEP = 25.0
+PLINTH_PROJ = 120.0
+PLINTH_H = 240.0
+TOWER_BAND_PROJ = 120.0
+TOWER_BAND_Z0 = TOWER_H - 650.0
+TOWER_BAND_H = 180.0
 
 # Roof parameters
 ROOF_OVERHANG = 150.0
 ROOF_SLOPE_PCT = 60.0
+ANNEX_ROOF_SLOPE_PCT = 48.0
 ROOF_THICKNESS = 120.0
 CHIMNEY_W = 500.0
 CHIMNEY_D = 500.0
@@ -273,6 +279,7 @@ def write_body(path: Path):
     zs = [
         0.0,
         t,
+        PLINTH_H,
         win_z0,
         DOOR_H,
         win_z1,
@@ -280,6 +287,8 @@ def write_body(path: Path):
         main["z1"],
         annex["z1"] - CEILING_THICKNESS,
         annex["z1"],
+        TOWER_BAND_Z0,
+        TOWER_BAND_Z0 + TOWER_BAND_H,
         TOWER_H - CEILING_THICKNESS,
         TOWER_H,
         TOWER_WINDOW_Z0,
@@ -297,6 +306,31 @@ def write_body(path: Path):
         xs.append(tower_x0 + n * step)
     for n in range(n_y + 1):
         ys.append(tower_y0 + n * step)
+    # Slight footprint expansion for plinths and tower belt.
+    xs.extend(
+        [
+            main["x0"] - PLINTH_PROJ,
+            main["x1"] + PLINTH_PROJ,
+            annex["x0"] - PLINTH_PROJ,
+            annex["x1"] + PLINTH_PROJ,
+            TOWER_CX - TOWER_RADIUS - PLINTH_PROJ,
+            TOWER_CX + TOWER_RADIUS + PLINTH_PROJ,
+            TOWER_CX - TOWER_RADIUS - TOWER_BAND_PROJ,
+            TOWER_CX + TOWER_RADIUS + TOWER_BAND_PROJ,
+        ]
+    )
+    ys.extend(
+        [
+            main["y0"] - PLINTH_PROJ,
+            main["y1"] + PLINTH_PROJ,
+            annex["y0"] - PLINTH_PROJ,
+            annex["y1"] + PLINTH_PROJ,
+            TOWER_CY - TOWER_RADIUS - PLINTH_PROJ,
+            TOWER_CY + TOWER_RADIUS + PLINTH_PROJ,
+            TOWER_CY - TOWER_RADIUS - TOWER_BAND_PROJ,
+            TOWER_CY + TOWER_RADIUS + TOWER_BAND_PROJ,
+        ]
+    )
 
     xs = unique_sorted(xs)
     ys = unique_sorted(ys)
@@ -383,6 +417,28 @@ def write_body(path: Path):
         in_inner = r2 < inner_r * inner_r and t < zc < TOWER_H - CEILING_THICKNESS
         return in_outer and not in_inner
 
+    def in_plinth_rect(rect, xc, yc, zc):
+        return (
+            rect["x0"] - PLINTH_PROJ < xc < rect["x1"] + PLINTH_PROJ
+            and rect["y0"] - PLINTH_PROJ < yc < rect["y1"] + PLINTH_PROJ
+            and 0.0 < zc < PLINTH_H
+        )
+
+    def in_tower_plinth(xc, yc, zc):
+        dx = xc - TOWER_CX
+        dy = yc - TOWER_CY
+        r2 = dx * dx + dy * dy
+        outer_r = TOWER_RADIUS + PLINTH_PROJ
+        return r2 < outer_r * outer_r and 0.0 < zc < PLINTH_H
+
+    def in_tower_belt(xc, yc, zc):
+        dx = xc - TOWER_CX
+        dy = yc - TOWER_CY
+        r2 = dx * dx + dy * dy
+        inner_r = TOWER_RADIUS
+        outer_r = TOWER_RADIUS + TOWER_BAND_PROJ
+        return inner_r * inner_r < r2 < outer_r * outer_r and TOWER_BAND_Z0 < zc < TOWER_BAND_Z0 + TOWER_BAND_H
+
     solid = [[[False for _ in range(nz)] for _ in range(ny)] for _ in range(nx)]
     for i in range(nx):
         xc = 0.5 * (xs[i] + xs[i + 1])
@@ -390,7 +446,15 @@ def write_body(path: Path):
             yc = 0.5 * (ys[j] + ys[j + 1])
             for k in range(nz):
                 zc = 0.5 * (zs[k] + zs[k + 1])
-                filled = (in_shell(main, xc, yc, zc) or in_shell(annex, xc, yc, zc) or in_tower_shell(xc, yc, zc)) and not in_opening(xc, yc, zc)
+                filled = (
+                    in_shell(main, xc, yc, zc)
+                    or in_shell(annex, xc, yc, zc)
+                    or in_tower_shell(xc, yc, zc)
+                    or in_plinth_rect(main, xc, yc, zc)
+                    or in_plinth_rect(annex, xc, yc, zc)
+                    or in_tower_plinth(xc, yc, zc)
+                    or in_tower_belt(xc, yc, zc)
+                ) and not in_opening(xc, yc, zc)
                 solid[i][j][k] = filled
 
     def is_solid(i, j, k):
@@ -425,8 +489,8 @@ def write_body(path: Path):
         f.write("endsolid house_body\n")
 
 
-def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimney=False):
-    slope = ROOF_SLOPE_PCT / 100.0
+def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimney=False, slope_pct=ROOF_SLOPE_PCT, skylight_shift=0.38):
+    slope = slope_pct / 100.0
     y_ridge = (y0 + y1) / 2.0
     run = y_ridge - y0
     z1 = z0 + slope * run
@@ -508,7 +572,7 @@ def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimn
         push_quad((cap_x1, cap_y0, cap_z0), (cap_x1, cap_y0, cap_z1), (cap_x1, cap_y1, cap_z1), (cap_x1, cap_y1, cap_z0))
 
     # Low-profile attic skylight on front slope, slanted to match roof pitch.
-    sky_cx = x0 + (x1 - x0) * 0.38
+    sky_cx = x0 + (x1 - x0) * skylight_shift
     sky_cy = y0 + (y_ridge - y0) * 0.52
     sky_x0 = sky_cx - SKYLIGHT_W / 2.0
     sky_x1 = sky_cx + SKYLIGHT_W / 2.0
@@ -577,6 +641,8 @@ def roof_triangles(include_bottom_caps: bool):
         z0=BODY_H,
         include_bottom_caps=include_bottom_caps,
         add_chimney=True,
+        slope_pct=ROOF_SLOPE_PCT,
+        skylight_shift=0.38,
     )
 
     # Annex roof section
@@ -590,6 +656,8 @@ def roof_triangles(include_bottom_caps: bool):
         z0=annex["z1"],
         include_bottom_caps=include_bottom_caps,
         add_chimney=False,
+        slope_pct=ANNEX_ROOF_SLOPE_PCT,
+        skylight_shift=0.42,
     )
 
     # Tower cone roof (60% pitch).
