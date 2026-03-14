@@ -226,6 +226,21 @@ def write_ascii_stl_triangles(path: Path, name: str, triangles):
         f.write(f"endsolid {name}\n")
 
 
+def split_triangles_by_z(triangles, z_cut):
+    lower = []
+    upper = []
+    for tri in triangles:
+        zs = [p[2] for p in tri]
+        if max(zs) <= z_cut:
+            lower.append(tri)
+        elif min(zs) >= z_cut:
+            upper.append(tri)
+        else:
+            # This should not happen once the body voxel grid includes the cut plane.
+            lower.append(tri)
+    return lower, upper
+
+
 def bounds_of_triangles(triangles):
     xs, ys, zs = [], [], []
     for p1, p2, p3 in triangles:
@@ -643,6 +658,7 @@ def body_triangles(include_ceilings=True):
         0.0,
         t,
         PLINTH_H,
+        FLOOR_HEIGHT,
         win_z0,
         DOOR_H,
         win_z1,
@@ -1094,13 +1110,14 @@ def main():
     roof_tris_open = read_ascii_stl_triangles(roof_path)
     roof_tris_closed = roof_triangles_closed_underside()
     body_tris_open_top = body_triangles(include_ceilings=False)
-    floor_tris = floor_overlay_triangles()
+    lower_body_tris, upper_body_tris = split_triangles_by_z(body_tris_open_top, FLOOR_HEIGHT)
+    floor_tris = lower_body_tris + floor_overlay_triangles()
 
     write_3mf(
         body_3mf_path,
         "house_body",
         [
-            {"name": "walls", "material_index": 0, "triangles": body_tris},
+            {"name": "walls", "material_index": 0, "triangles": upper_body_tris},
             {"name": "floors", "material_index": 1, "triangles": floor_tris},
         ],
     )
@@ -1120,7 +1137,7 @@ def main():
     write_ascii_stl_triangles(merged_path, "house_merged", merged_tris)
 
     scaled_3mf_parts, _, _, _ = scale_and_rebase_parts(
-        [("walls", body_tris_open_top), ("roof", roof_tris_closed), ("floors", floor_tris)],
+        [("walls", upper_body_tris), ("roof", roof_tris_closed), ("floors", floor_tris)],
         max_size=180.0,
     )
     scaled_wall_tris = scaled_3mf_parts[0][1]
