@@ -53,6 +53,11 @@ TOWER_WINDOW_Z0 = 1700.0
 TOWER_WINDOW_ANG_HALF_DEG = 6.0
 TOWER_WINDOW_CENTERS_DEG = (110.0, 180.0, 250.0, 320.0)
 TOWER_GRID_STEP = 25.0
+TOWER_CONNECTOR_X0 = -250.0
+TOWER_CONNECTOR_X1 = 0.0
+TOWER_CONNECTOR_Y0 = TOWER_CY - 700.0
+TOWER_CONNECTOR_Y1 = TOWER_CY + 700.0
+TOWER_CONNECTOR_Z1 = BODY_H
 PLINTH_PROJ = 120.0
 PLINTH_H = 240.0
 TOWER_BAND_PROJ = 120.0
@@ -384,6 +389,14 @@ def body_rect(x0, y0, z0, w, d, h):
 def body_triangles(include_ceilings=True):
     main = body_rect(0.0, 0.0, 0.0, BODY_W, BODY_D, BODY_H)
     annex = body_rect(ANNEX_X0, ANNEX_Y0, ANNEX_Z0, ANNEX_W, ANNEX_D, ANNEX_H)
+    tower_connector = body_rect(
+        TOWER_CONNECTOR_X0,
+        TOWER_CONNECTOR_Y0,
+        0.0,
+        TOWER_CONNECTOR_X1 - TOWER_CONNECTOR_X0,
+        TOWER_CONNECTOR_Y1 - TOWER_CONNECTOR_Y0,
+        TOWER_CONNECTOR_Z1,
+    )
 
     t = EXTERIOR_WALL_THICKNESS
     t_int = INTERIOR_WALL_THICKNESS
@@ -429,10 +442,12 @@ def body_triangles(include_ceilings=True):
     xs = [
         main["x0"], main["x0"] + t, main_door_x0, main_door_x1, main_back_wx0, main_back_wx1, main["x1"] - t, main["x1"],
         annex["x0"], annex["x0"] + t, annex_front_wx0, annex_front_wx1, annex_back_wx0, annex_back_wx1, annex["x1"] - t, annex["x1"],
+        tower_connector["x0"], tower_connector["x1"],
     ]
     ys = [
         main["y0"], main["y0"] + t, main_side_wy0, main_side_wy1, main["y1"] - t, main["y1"],
         annex["y0"], annex["y0"] + t, annex_side_wy0, annex_side_wy1, annex["y1"] - t, annex["y1"],
+        tower_connector["y0"], tower_connector["y1"],
     ]
     zs = [
         0.0,
@@ -616,6 +631,7 @@ def body_triangles(include_ceilings=True):
                 filled = (
                     in_shell(main, xc, yc, zc)
                     or in_shell(annex, xc, yc, zc)
+                    or in_shell(tower_connector, xc, yc, zc)
                     or in_tower_shell(xc, yc, zc)
                     or in_plinth_rect(main, xc, yc, zc)
                     or in_plinth_rect(annex, xc, yc, zc)
@@ -665,29 +681,12 @@ def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimn
     run = y_ridge - y0
     z1 = z0 + slope * run
 
-    t = ROOF_THICKNESS
-    slope_shift = t * math.sqrt(1.0 + slope * slope)
-
-    xi0 = x0 + t
-    xi1 = x1 - t
-    zi0 = z0 + t
-    y_front_inner = y0 + (t + slope_shift) / slope
-    y_back_inner = y1 - (t + slope_shift) / slope
-    z_ridge_inner = z1 - slope_shift
-
     o_fl = (x0, y0, z0)
     o_fr = (x1, y0, z0)
     o_rl = (x0, y1, z0)
     o_rr = (x1, y1, z0)
     o_tl = (x0, y_ridge, z1)
     o_tr = (x1, y_ridge, z1)
-
-    i_fl = (xi0, y_front_inner, zi0)
-    i_fr = (xi1, y_front_inner, zi0)
-    i_rl = (xi0, y_back_inner, zi0)
-    i_rr = (xi1, y_back_inner, zi0)
-    i_tl = (xi0, y_ridge, z_ridge_inner)
-    i_tr = (xi1, y_ridge, z_ridge_inner)
 
     def push_tri(p1, p2, p3):
         tris.append((p1, p2, p3))
@@ -701,14 +700,8 @@ def append_roof_section(tris, x0, x1, y0, y1, z0, include_bottom_caps, add_chimn
     push_tri(o_fl, o_tl, o_rl)
     push_tri(o_fr, o_rr, o_tr)
 
-    push_quad(i_tl, i_tr, i_fr, i_fl)
-    push_quad(i_rl, i_rr, i_tr, i_tl)
-    push_tri(i_rl, i_tl, i_fl)
-    push_tri(i_tr, i_rr, i_fr)
-
     if include_bottom_caps:
         push_quad(o_fl, o_rl, o_rr, o_fr)
-        push_quad(i_fl, i_fr, i_rr, i_rl)
 
     if add_chimney:
         chim_cx = x0 + (x1 - x0) * 0.72
