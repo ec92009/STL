@@ -347,13 +347,17 @@ def write_body(path: Path):
             and shared_y0 < yc < shared_y1
             and shared_z0 < zc < shared_z1
         )
-        # Restrict opening to the overlapping region between main box and tower
-        # to avoid cutting away the tower's front wall.
-        overlap_y0 = max(main["y0"], TOWER_CY - TOWER_RADIUS)
-        overlap_y1 = min(main["y1"], TOWER_CY + TOWER_RADIUS)
+        # Cut the shared tower/main wall using the tower's own circular footprint
+        # so we remove the remaining sliver without flattening the tower facade.
+        tower_overlap_r = TOWER_RADIUS + EXTERIOR_WALL_THICKNESS
+        in_tower_overlap = (
+            (xc - TOWER_CX) * (xc - TOWER_CX) + (yc - TOWER_CY) * (yc - TOWER_CY)
+            < tower_overlap_r * tower_overlap_r
+        )
         open_main_tower = (
-            main_tower_open_x0 < xc < main_tower_open_x1
-            and overlap_y0 < yc < overlap_y1
+            main["x0"] - EXTERIOR_WALL_THICKNESS < xc < main_tower_open_x1
+            and main["y0"] + EXTERIOR_WALL_THICKNESS < yc < main["y1"] - EXTERIOR_WALL_THICKNESS
+            and in_tower_overlap
             and main_tower_open_z0 < zc < main_tower_open_z1
         )
 
