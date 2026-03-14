@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Generate ASCII STL files for a three-body house.
-- house_body.stl: hollow main body + annex + cylindrical tower with openings
-- house_roof.stl: two-slope roofs + conical tower roof (60% pitch), open underside
-- house_merged.stl: merged body+roof, scaled to fit 180x180x180 mm
+Generate house geometry as STL and colored 3MF files.
+- house_body: hollow main body + annex + cylindrical tower with openings
+- house_roof: two-slope roofs + conical tower roof (60% pitch), open underside
+- house_merged: merged body+roof, scaled to fit 180x180x180 mm
 
-Before each write, existing STL files are renamed to:
-<name>.<YYYYMMDD-HHMMSS>.prev.stl
+Before each write, existing outputs are renamed to:
+<name>.<YYYYMMDD-HHMMSS>.prev.<ext>
 """
 
 import math
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
 
 OUT_DIR = Path(__file__).parent
 REPO_ROOT = OUT_DIR.parent
@@ -73,6 +74,9 @@ SKYLIGHT_D = 520.0
 SKYLIGHT_H = 80.0
 SKYLIGHT_INSET = 90.0
 
+BODY_COLOR = "#E6DED0FF"
+ROOF_COLOR = "#4B4742FF"
+
 
 def sub(a, b):
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
@@ -128,7 +132,7 @@ def backup_existing(path: Path):
 
 def cleanup_old_backups(base_dir: Path):
     archive_dir = base_dir / "archive"
-    for pattern in ("*.prev.stl", "*.old.stl"):
+    for pattern in ("*.prev.stl", "*.old.stl", "*.prev.3mf", "*.old.3mf"):
         for p in base_dir.glob(pattern):
             if p.is_file():
                 p.unlink()
@@ -140,7 +144,7 @@ def cleanup_old_backups(base_dir: Path):
     if base_dir.name == "house":
         archive_dir = base_dir / "archive"
         if archive_dir.exists():
-            for pattern in ("*.prev.stl", "*.old.stl"):
+            for pattern in ("*.prev.stl", "*.old.stl", "*.prev.3mf", "*.old.3mf"):
                 for p in archive_dir.glob(pattern):
                     if p.is_file():
                         p.unlink()
@@ -210,6 +214,118 @@ def scale_and_rebase_to_fit(triangles, max_size=180.0):
         )
     new_mins, new_maxs = bounds_of_triangles(out)
     return out, scale, new_mins, new_maxs
+
+
+def scale_and_rebase_parts(parts, max_size=180.0):
+    all_triangles = []
+    for _, triangles in parts:
+        all_triangles.extend(triangles)
+    mins, maxs = bounds_of_triangles(all_triangles)
+    dx = maxs[0] - mins[0]
+    dy = maxs[1] - mins[1]
+    dz = maxs[2] - mins[2]
+    longest = max(dx, dy, dz)
+    scale = 1.0 if longest == 0 else max_size / longest
+
+    scaled_parts = []
+    for name, triangles in parts:
+        scaled = []
+        for p1, p2, p3 in triangles:
+            scaled.append(
+                (
+                    ((p1[0] - mins[0]) * scale, (p1[1] - mins[1]) * scale, (p1[2] - mins[2]) * scale),
+                    ((p2[0] - mins[0]) * scale, (p2[1] - mins[1]) * scale, (p2[2] - mins[2]) * scale),
+                    ((p3[0] - mins[0]) * scale, (p3[1] - mins[1]) * scale, (p3[2] - mins[2]) * scale),
+                )
+            )
+        scaled_parts.append((name, scaled))
+
+    scaled_all = []
+    for _, triangles in scaled_parts:
+        scaled_all.extend(triangles)
+    new_mins, new_maxs = bounds_of_triangles(scaled_all)
+    return scaled_parts, scale, new_mins, new_maxs
+
+
+def triangles_to_indexed_mesh(triangles):
+    vertex_index = {}
+    vertices = []
+    indexed = []
+    for p1, p2, p3 in triangles:
+        tri = []
+        for point in (p1, p2, p3):
+            key = tuple(round(v, 6) for v in point)
+            if key not in vertex_index:
+                vertex_index[key] = len(vertices)
+                vertices.append(key)
+            tri.append(vertex_index[key])
+        indexed.append(tuple(tri))
+    return vertices, indexed
+
+
+def write_3mf(path: Path, model_name: str, objects):
+    resources = []
+    build_items = []
+    material_xml = []
+
+    for color_index, obj in enumerate(objects):
+        material_xml.append(
+            f'<m:base name="{obj["name"]}" displaycolor="{obj["color"]}"/>'
+        )
+
+    for object_id, obj in enumerate(objects, start=1):
+        vertices, triangles = triangles_to_indexed_mesh(obj["triangles"])
+        verts_xml = "".join(
+            f'<vertex x="{x:.6f}" y="{y:.6f}" z="{z:.6f}"/>' for x, y, z in vertices
+        )
+        tris_xml = "".join(
+            f'<triangle v1="{a}" v2="{b}" v3="{c}"/>' for a, b, c in triangles
+        )
+        resources.append(
+            (
+                f'<object id="{object_id}" name="{obj["name"]}" type="model" pid="1" pindex="{object_id - 1}">'
+                f"<mesh><vertices>{verts_xml}</vertices><triangles>{tris_xml}</triangles></mesh>"
+                f"</object>"
+            )
+        )
+        build_items.append(f'<item objectid="{object_id}"/>')
+
+    model_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<model unit="millimeter" xml:lang="en-US" '
+        'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        'xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">'
+        "<metadata name=\"Title\">"
+        f"{model_name}"
+        "</metadata>"
+        "<resources>"
+        f'<m:basematerials id="1">{"".join(material_xml)}</m:basematerials>'
+        f'{"".join(resources)}'
+        "</resources>"
+        f"<build>{''.join(build_items)}</build>"
+        "</model>"
+    )
+
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Target="/3D/3dmodel.model" Id="rel0" '
+        'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+        "</Relationships>"
+    )
+
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+        "</Types>"
+    )
+
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types_xml)
+        zf.writestr("_rels/.rels", rels_xml)
+        zf.writestr("3D/3dmodel.model", model_xml)
 
 
 def body_rect(x0, y0, z0, w, d, h):
@@ -686,22 +802,53 @@ def main():
     body_path = OUT_DIR / "house_body.stl"
     roof_path = OUT_DIR / "house_roof.stl"
     merged_path = OUT_DIR / "house_merged.stl"
+    body_3mf_path = OUT_DIR / "house_body.3mf"
+    roof_3mf_path = OUT_DIR / "house_roof.3mf"
+    merged_3mf_path = OUT_DIR / "house_merged.3mf"
 
     cleanup_old_backups(OUT_DIR)
 
     body_backup = backup_existing(body_path)
     roof_backup = backup_existing(roof_path)
     merged_backup = backup_existing(merged_path)
+    body_3mf_backup = backup_existing(body_3mf_path)
+    roof_3mf_backup = backup_existing(roof_3mf_path)
+    merged_3mf_backup = backup_existing(merged_3mf_path)
 
     write_body(body_path)
     write_roof(roof_path)
 
     body_tris = read_ascii_stl_triangles(body_path)
-    roof_tris = roof_triangles_closed_underside()
+    roof_tris_open = read_ascii_stl_triangles(roof_path)
+    roof_tris_closed = roof_triangles_closed_underside()
 
-    merged_tris = body_tris + roof_tris
-    merged_tris, scale, mins, maxs = scale_and_rebase_to_fit(merged_tris, max_size=180.0)
+    write_3mf(
+        body_3mf_path,
+        "house_body",
+        [{"name": "body", "color": BODY_COLOR, "triangles": body_tris}],
+    )
+    write_3mf(
+        roof_3mf_path,
+        "house_roof",
+        [{"name": "roof", "color": ROOF_COLOR, "triangles": roof_tris_open}],
+    )
+
+    scaled_parts, scale, mins, maxs = scale_and_rebase_parts(
+        [("body", body_tris), ("roof", roof_tris_closed)],
+        max_size=180.0,
+    )
+    scaled_body_tris = scaled_parts[0][1]
+    scaled_roof_tris = scaled_parts[1][1]
+    merged_tris = scaled_body_tris + scaled_roof_tris
     write_ascii_stl_triangles(merged_path, "house_merged", merged_tris)
+    write_3mf(
+        merged_3mf_path,
+        "house_merged",
+        [
+            {"name": "body", "color": BODY_COLOR, "triangles": scaled_body_tris},
+            {"name": "roof", "color": ROOF_COLOR, "triangles": scaled_roof_tris},
+        ],
+    )
 
     if body_backup:
         print(f"Renamed {body_backup.name}")
@@ -709,9 +856,18 @@ def main():
         print(f"Renamed {roof_backup.name}")
     if merged_backup:
         print(f"Renamed {merged_backup.name}")
+    if body_3mf_backup:
+        print(f"Renamed {body_3mf_backup.name}")
+    if roof_3mf_backup:
+        print(f"Renamed {roof_3mf_backup.name}")
+    if merged_3mf_backup:
+        print(f"Renamed {merged_3mf_backup.name}")
     print(f"Wrote {body_path}")
     print(f"Wrote {roof_path}")
     print(f"Wrote {merged_path}")
+    print(f"Wrote {body_3mf_path}")
+    print(f"Wrote {roof_3mf_path}")
+    print(f"Wrote {merged_3mf_path}")
     print(
         "Merged scale={:.6f} size=({:.3f}, {:.3f}, {:.3f}) mm".format(
             scale,
