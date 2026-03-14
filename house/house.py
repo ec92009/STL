@@ -35,8 +35,8 @@ ANNEX_Z0 = 0.0
 # Diameter 3m -> radius 1.5m; height 6m
 TOWER_RADIUS = 1500.0
 TOWER_H = 6000.0
-# Slight overlap into main body so we can open an interior passage.
-TOWER_CX = -TOWER_RADIUS + 600.0
+# Slight overlap into main body so the connection reads as intentional.
+TOWER_CX = -TOWER_RADIUS + 850.0
 TOWER_CY = BODY_D / 2.0
 
 # Body parameters
